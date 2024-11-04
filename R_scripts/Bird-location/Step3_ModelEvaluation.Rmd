@@ -1,0 +1,130 @@
+[Species Centered BRT Model]
+
+Goal: Evaluate species distribution models for all species of birds from Oregon trained BRT
+
+Load packages
+```{r}
+library(pROC)
+library(foreach)
+library(doParallel)
+library(reticulate)
+library(rgee)
+library(ggplot2)
+library(mice)
+library(gbm)
+library(terra)
+library(raster)
+library(dismo)
+library(gbm)
+```
+
+Load Test Data for species-centered
+```{r}
+# Define the base directory
+testdata_dir <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/Data/TestData/"
+
+# Define file names
+file_names <- c("SpeciesCentered_FixedRadius.csv", "SpeciesCentered_noRadius.csv", "SpeciesCentered_ESW.csv")
+
+# Load and assign datasets to variables
+fixed.test <- read.csv(paste0(testdata_dir, file_names[1]))
+noRadius.test <- read.csv(paste0(testdata_dir, file_names[2]))
+esw.test <- read.csv(paste0(testdata_dir, file_names[3]))
+```
+
+Load the Trained models for species-centered strategy
+```{r}
+individual_species_oregon <- split(fixed.test, fixed.test$Common_Name)
+
+model.dir.noradius <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_NoRadius"
+noradius.models <- list.files(model.dir.noradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+model.dir.fixedradius <- "//Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_FixedRadius"
+fixedradius.models <- list.files(model.dir.fixedradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+model.dir.esw <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_ESW"
+esw.models <- list.files(model.dir.esw, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+
+result <- data.frame(Species = character(),
+                     Extraction_Approach = character(),
+                     No_radius = numeric(),
+                     Fixed_Radius = numeric(),
+                     Effective_Strip_Width = numeric())
+
+# Function to load all models for a given bird species
+load_models_for_species <- function(species_name) {
+
+    #===For no radius====#
+  
+    noradius.perspecies <- grep(species_name, noradius.models, value = TRUE)
+    noradius.perspecies.model <- readRDS(noradius.perspecies)
+
+    pred.noRadius <- predict.gbm(object = noradius.perspecies.model, 
+                          newdata = noRadius.test[noRadius.test$Common_Name == species_name, ],
+                          n.trees = noradius.perspecies.model$gbm.call$best.trees,
+                          type = "response") 
+    
+    print("===")
+    # Calculate AUC
+    d.noRadius <- cbind(noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, pred.noRadius)
+    pres.noRadius <- d.noRadius[d.noRadius[,1]>= 1, 2]
+    abs.noRadius <- d.noRadius[d.noRadius[,1] == 0, 2]
+    e.noRadius <- evaluate(p = pres.noRadius, a = abs.noRadius)
+    print("===")
+    
+    
+    #===For fixed radius===#
+    
+    fixedradius.perspecies <- grep(species_name, fixedradius.models, value = TRUE)
+    fixedradius.perspecies.model <- readRDS(fixedradius.perspecies)
+    
+    pred.fixed <- predict.gbm(object = fixedradius.perspecies.model, 
+                          newdata = fixed.test[fixed.test$Common_Name == species_name, ],
+                          n.trees = fixedradius.perspecies.model$gbm.call$best.trees,
+                          type = "response")
+    # Calculate AUC
+    d <- cbind(fixed.test[fixed.test$Common_Name == species_name, ]$Occur, pred.fixed)
+
+    pres <- d[d[,1]>= 1, 2]
+    abs <- d[d[,1] == 0, 2]
+    e.fixed <- evaluate(p = pres, a = abs)
+    
+    #====For ESW=====#
+    
+    esw.perspecies <- grep(species_name, esw.models, value = TRUE)
+    esw.perspecies.model <- readRDS(esw.perspecies)
+    
+    pred.ESW <- predict.gbm(object = esw.perspecies.model, 
+                          newdata = esw.test[esw.test$Common_Name == species_name, ],
+                          n.trees = esw.perspecies.model$gbm.call$best.trees,
+                          type = "response") 
+    
+    # Calculate AUC
+    d.ESW <- cbind(esw.test[esw.test$Common_Name == species_name, ]$Occur, pred.ESW)
+    pres.ESW <- d.ESW[d.ESW[,1]>= 1, 2]
+    abs.ESW <- d.ESW[d.ESW[,1] == 0, 2]
+    e.ESW <- evaluate(p = pres.ESW, a = abs.ESW)
+        
+    per_bird.result <- data.frame(Species = species_name,
+                         Extraction_Approach = "Species-Centered Approach",
+                         No_radius = e.noRadius@auc,
+                         Fixed_Radius = e.fixed@auc,
+                         Effective_Strip_Width = e.ESW@auc)
+    return (per_bird.result)
+    
+}
+
+
+# Loop over each bird species name and load models
+for (bird in names(individual_species_oregon)) {
+  print(bird)
+  per_bird.result <- load_models_for_species(bird)
+  result <- rbind(result, per_bird.result)
+}
+
+```
+
+```{r}
+print(result)
+```
