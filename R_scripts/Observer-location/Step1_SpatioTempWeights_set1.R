@@ -25,7 +25,7 @@ base_dir <- "/nfs/stak/users/shenf/hpc-share/dynamicSDM"
 oregon <- read.csv("/nfs/stak/users/shenf/hpc-share/oregon_all-zerofilled.csv")
 
 #' 
-#' Load environmental values from bird-centered
+#' Load environmental values from observer-centered
 ## -------------------------------------------------------------------------------------------------------------
 bird.env.noRadius <- read.csv("/nfs/stak/users/shenf/hpc-share/Gini_index/Median_withSpecialYear_surveyCentered_noRadius.csv")
 bird.env.fixRadius <- read.csv("/nfs/stak/users/shenf/hpc-share/Gini_index/Median_withSpecialYear_surveyCentered_100mfixedRadius.csv")
