@@ -1,0 +1,288 @@
+[Observer location BRT Model]
+
+Goal: Evaluate species distribution models for all species of birds from Oregon trained BRT
+
+Load packages
+```{r}
+library(pROC)
+library(foreach)
+library(doParallel)
+library(reticulate)
+library(rgee)
+library(ggplot2)
+library(mice)
+library(gbm)
+library(terra)
+library(raster)
+library(dismo)
+library(gbm)
+library(tidyverse)
+library(readr)
+```
+
+Read ESW test dataset
+# We will treat esw file differently since parsing issue has occurred
+```{r}
+
+esw.test <- readr::read_csv("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TestData/SurveyCentered/SurveyCentered_ESW.csv", col_names = TRUE)
+spec(esw.test)
+problems(esw.test)
+
+esw.test <- esw.test[-c(39007,39008),]
+```
+
+
+Load Test Data for observer-centered
+```{r}
+# Define the base directory
+testdata_dir <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TestData/SurveyCentered/"
+
+# Define file names
+file_names <- c("SurveyCentered_FixedRadius.csv", "SurveyCentered_noRadius.csv")
+
+# Load and assign datasets to variables
+fixed.test <- read.csv(paste0(testdata_dir, file_names[1]))
+noRadius.test <- read.csv(paste0(testdata_dir, file_names[2]))
+
+
+```
+
+Load the Trained models for observer-centered strategy
+```{r}
+individual_species_oregon <- split(fixed.test, fixed.test$Common_Name)
+
+model.dir.noradius <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SurveyCentered/SurveyCentered_NoRadius"
+noradius.models <- list.files(model.dir.noradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+model.dir.fixedradius <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SurveyCentered/SurveyCentered_FixedRadius"
+fixedradius.models <- list.files(model.dir.fixedradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+model.dir.esw <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SurveyCentered/SurveyCentered_ESW"
+esw.models <- list.files(model.dir.esw, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
+
+# Create empty dataframe to store evaluation results
+result <- data.frame(Species = character(),
+                     Extraction_Approach = character(),
+                     Metric = character(),
+                     No_radius = numeric(),
+                     Fixed_Radius = numeric(),
+                     Effective_Strip_Width = numeric())
+
+```
+
+***===Model Evaluation (AUC, Kappa, True Skill Statistic (TSS))====***
+***Assign NA to NULL BRT models for each species & predictor extraction method***
+Load all models for a given species and calculate AUC values
+```{r}
+load_models_for_species <- function(species_name) {
+
+    # Initialize variables to store AUC values
+    auc_noRadius <- NA
+    auc_fixed <- NA
+    auc_esw <- NA
+
+    # Initialize variables to store Kappa values
+    kappa_noRadius <- NA
+    kappa_fixed <- NA
+    kappa_esw <- NA
+    
+    # Initialize variables to store TSS values
+    tss_noRadius <- NA
+    tss_fixed <- NA
+    tss_esw <- NA
+    
+    #=== For no radius ===#
+    noradius.perspecies <- grep(species_name, noradius.models, value = TRUE)
+    
+    if (length(noradius.perspecies) > 0) {
+        noradius.perspecies.model <- readRDS(noradius.perspecies)
+        
+        if (!is.null(noradius.perspecies.model$gbm.call$best.trees)) {
+            pred.noRadius <- predict.gbm(object = noradius.perspecies.model, 
+                                         newdata = noRadius.test[noRadius.test$Common_Name == species_name, ],
+                                         n.trees = noradius.perspecies.model$gbm.call$best.trees,
+                                         type = "response")
+                                         
+            # Calculate AUC
+            d.noRadius <- cbind(noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, pred.noRadius)
+            pres.noRadius <- d.noRadius[d.noRadius[, 1] >= 1, 2]
+            abs.noRadius <- d.noRadius[d.noRadius[, 1] == 0, 2]
+            e.noRadius <- evaluate(p = pres.noRadius, a = abs.noRadius)
+            auc_noRadius <- e.noRadius@auc
+            
+            # Calculate kappa
+            kappa_noRadius <- max(e.noRadius@kappa)
+            
+            # Calculate TSS
+            tss_noRadius <- max(e.noRadius@TPR + e.noRadius@TNR) - 1
+        }
+    }
+
+    #=== For fixed radius ===#
+    fixedradius.perspecies <- grep(species_name, fixedradius.models, value = TRUE)
+    
+    if (length(fixedradius.perspecies) > 0) {
+        fixedradius.perspecies.model <- readRDS(fixedradius.perspecies)
+        
+        if (!is.null(fixedradius.perspecies.model$gbm.call$best.trees)) {
+            pred.fixed <- predict.gbm(object = fixedradius.perspecies.model, 
+                                      newdata = fixed.test[fixed.test$Common_Name == species_name, ],
+                                      n.trees = fixedradius.perspecies.model$gbm.call$best.trees,
+                                      type = "response")
+                                      
+            # Calculate AUC
+            d.fixed <- cbind(fixed.test[fixed.test$Common_Name == species_name, ]$Occur, pred.fixed)
+            pres.fixed <- d.fixed[d.fixed[, 1] >= 1, 2]
+            abs.fixed <- d.fixed[d.fixed[, 1] == 0, 2]
+            e.fixed <- evaluate(p = pres.fixed, a = abs.fixed)
+            auc_fixed <- e.fixed@auc
+            
+             # Calculate kappa
+            kappa_fixed <- max(e.fixed@kappa)
+            
+            # Calculate TSS
+            tss_fixed <- max(e.fixed@TPR + e.fixed@TNR) - 1
+        }
+    }
+
+    #=== For ESW ===#
+    esw.perspecies <- grep(species_name, esw.models, value = TRUE)
+    
+    if (length(esw.perspecies) > 0) {
+        esw.perspecies.model <- readRDS(esw.perspecies)
+        
+        if (!is.null(esw.perspecies.model$gbm.call$best.trees)) {
+            pred.ESW <- predict.gbm(object = esw.perspecies.model, 
+                                    newdata = esw.test[esw.test$Common_Name == species_name, ],
+                                    n.trees = esw.perspecies.model$gbm.call$best.trees,
+                                    type = "response")
+                                    
+            # Calculate AUC
+            d.esw <- cbind(esw.test[esw.test$Common_Name == species_name, ]$Occur, pred.ESW)
+            pres.ESW <- d.esw[d.esw[, 1] >= 1, 2]
+            abs.ESW <- d.esw[d.esw[, 1] == 0, 2]
+            e.esw <- evaluate(p = pres.ESW, a = abs.ESW)
+            auc_esw <- e.esw@auc
+            
+           # Calculate kappa
+            kappa_esw <- max(e.esw@kappa)
+            
+            # Calculate TSS
+            tss_esw <- max(e.esw@TPR + e.esw@TNR) - 1
+        }
+    }
+
+    # Store results in a dataframe
+     # AUC
+    per_bird.result.AUC <- data.frame(Species = species_name,
+                                  Extraction_Approach = "Observer-Centered Approach",
+                                  Metric = "AUC",
+                                  No_radius = auc_noRadius,
+                                  Fixed_Radius = auc_fixed,
+                                  Effective_Strip_Width = auc_esw)
+    # Kappa
+    per_bird.result.kappa <- data.frame(Species = species_name,
+                                  Extraction_Approach = "Observer-Centered Approach",
+                                  Metric = "Kappa",
+                                  No_radius = kappa_noRadius,
+                                  Fixed_Radius = kappa_fixed,
+                                  Effective_Strip_Width = kappa_esw)
+    
+    # TSS
+    per_bird.result.tss <- data.frame(Species = species_name,
+                                  Extraction_Approach = "Observer-Centered Approach",
+                                  Metric = "TSS",
+                                  No_radius = tss_noRadius,
+                                  Fixed_Radius = tss_fixed,
+                                  Effective_Strip_Width = tss_esw)
+    
+    # Concatenate per bird results in one data frame
+    per_bird.result <- rbind(per_bird.result.AUC, per_bird.result.kappa, per_bird.result.tss)
+    
+    return(per_bird.result)
+}
+
+
+# Loop over each bird species name and load models
+for (bird in names(individual_species_oregon)) {
+  print(bird)
+  per_bird.result <- load_models_for_species(bird)
+  result <- rbind(result, per_bird.result)
+}
+
+```
+
+Export as CSV
+```{r}
+write.table(result, file = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/evalMetric-ObserverCentered.csv", sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
+
+```
+
+Print & plot individual results
+```{r}
+print(result)
+tapply(result[4:6], result$Metric, summary)
+
+
+# Plot AUC box plot
+AUC <- result[result$Metric == "AUC",]
+png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/AUC-ObserverCentered.png", width = 2500, height = 2200, res = 300)
+boxplot(AUC[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "AUC",
+        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
+dev.off()
+
+# Plot Kappa
+kappa <- result[result$Metric == "Kappa",]
+png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/Kappa-ObserverCentered.png", width = 2500, height = 2200, res = 300)
+boxplot(kappa[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "Kappa",
+        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
+dev.off()
+
+# Plot TSS
+tss <- result[result$Metric == "TSS",]
+png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/TSS-ObserverCentered.png", width = 2500, height = 2200, res = 300)
+boxplot(tss[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "TSS",
+        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
+dev.off()
+
+
+```
+
+
+Combine evaluation metrics together
+```{r}
+# Plot AUC box plot
+AUC <- result[result$Metric == "AUC",]
+kappa <- result[result$Metric == "Kappa",]
+tss <- result[result$Metric == "TSS",]
+
+png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/evaMetic-ObserverCentered.png", width = 4500, height = 4200, res = 300)
+par(mfrow = c(2,2))
+ 
+  # AUC
+boxplot(AUC[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "AUC",
+        main = "Observer-centered AUC evaluation")
+
+  # Kappa
+boxplot(kappa[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "Kappa",
+        main = "Observer-centered Cohen's Kappa evaluation")
+
+
+  # TSS
+boxplot(tss[,c(4:6)],
+        xlab = "Mapping strategy",
+        ylab = "TSS",
+        main = "Observer-centered True Skill Statistic evaluation")
+dev.off()
+
+```
