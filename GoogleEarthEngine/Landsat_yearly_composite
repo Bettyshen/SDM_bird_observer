@@ -188,7 +188,7 @@ print("Landsat", year_monthCompList);
 var yearArray = yearList.getInfo(); //storing it in the 'yearArray' variable. #getInfo helps to retrieve the value
 
 // Iterate over the yearArray usinng for loop, and export the yearly composites
-  // Withinn each iteration, we export the yearly median Land Surface Temperature composites.
+  // Withinn each iteration, we export the yearly median Landsat composites.
 for (var i = 0; i < yearArray.length; i++) {
   var year = yearArray[i];
   
