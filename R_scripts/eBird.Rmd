@@ -1,0 +1,359 @@
+---
+title: "eBird_PreAbs_all"
+author: "Betty Shen"
+date: "2023-05-07"
+output: html_document
+---
+Load packages
+```{r}
+#Load packages
+
+rm(list = ls())
+library(auk)
+library(data.table)
+library(plyr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+#library(sf)
+library(tidyverse)
+library(reshape)
+library(readr)
+library(parallel)
+
+```
+
+Set working directory and load file
+```{r}
+Working.directory <-"/nfs/stak/users/shenf/hpc-share"
+setwd(Working.directory)
+
+eBird.data.file <- "ebd_US-OR_201005_202007_relMar-2023.txt"
+eBird.sampling.file <- "ebd_sampling_relMar-2023.txt"
+
+# set ebd path
+
+auk::auk_set_ebd_path("/nfs/stak/users/shenf/hpc-share", overwrite = TRUE)
+#install.packages("remotes")
+#remotes::install_github("mstrimas/ebppackages")
+
+# 2. Point at the exact files to use # 
+ebd <- auk_ebd("ebd_US-OR_201005_202007_relMar-2023.txt", 
+               file_sampling = "ebd_sampling_relMar-2023.txt")
+
+#3. "Define" filters to select which data we want## 
+ebd_filters <- ebd %>% 
+  auk_country("US")%>%
+  auk_state("US-OR") %>%
+  auk_date(c("*-05-08", "*-7-15")) %>%
+  auk_protocol("Stationary") %>%
+  auk_duration(duration = c(0,30)) %>%
+  auk_complete()
+ebd_filters
+
+# 4. Name output files in a new "data" folder and conduct filtering # 
+data_dir <- "eBird_data"
+if (!dir.exists(data_dir)) {
+  dir.create(data_dir)
+}
+
+f_ebd <- file.path(data_dir, "ebd_filtered_2010.2020_all.txt") #Name filtered eBird file
+f_sampling <- file.path(data_dir, "ebd_filtered_sampling_2010.2020_all.txt") #Name filterd sampling file
+
+# 5. Filter the eBird data (by using the filter we defined earlier)
+if (!file.exists(f_ebd)) {
+  auk_filter(ebd_filters, file = f_ebd, file_sampling = f_sampling)
+}
+```
+
+Zero-filter for presence-absence data
+
+```{r}
+
+##  Zero-fill the data ######
+ebd_zf <- auk_zerofill(f_ebd, f_sampling, collapse = TRUE) 
+
+unique(ebd_zf$locality_type)
+
+#====6. Clean up variables ====##
+# function to convert time observation to hours since midnight
+time_to_decimal <- function(x) {
+  x <- hms(x, quiet = TRUE)
+  hour(x) + minute(x) / 60 + second(x) / 3600
+}
+
+# clean up variables
+ebd_zf <- ebd_zf %>% 
+  mutate(
+    # convert X to NA
+    observation_count = if_else(observation_count == "X", 
+                                NA_character_, observation_count),
+    observation_count = as.integer(observation_count),
+    # effort_distance_km to 0 for non-travelling counts
+    effort_distance_km = if_else(protocol_type != "Traveling", 
+                                 0, effort_distance_km),
+    # convert time to decimal hours since midnight
+    time_observations_started = time_to_decimal(time_observations_started),
+    # split date into year and day of year
+    year = year(observation_date),
+    day_of_year = yday(observation_date)
+  )
+#== additional filtering==#
+ebd_zf_filtered <- ebd_zf %>%
+  filter(
+    number_observers <= 10,
+    locality_type == "P"
+  )
+  
+ebd_unique <- auk_unique(ebd_zf_filtered)
+
+head(ebd_unique)
+
+count(ebd_unique)
+
+#write.table(ebd_unique, "Bird_OR_zf.txt", sep = "\t", row.names = TRUE, na = "", fileEncoding = "UTF-8")
+#ebd_unique <- fread("Bird_OR_zf.txt")
+```
+
+Remove eBird-style Oregon 2020 data, since Oregon2020 stationary counts have been uploaded to eBird. We need to remove duplicate data via unique identifier 
+
+```{r}
+# Load Oregon 2020 data
+oregon2020 <- read.csv("oregon2020_full_prepped_090120.csv")
+
+#Let's see the unique identifier from Oregon 2020
+ #==Split the Unique_Checklist_ID to separate Latitude, Longitude, Year, Month, Day apart from obeserver==#
+observer <- as.data.frame(str_split_fixed(oregon2020[,33],"_",4))
+observer[c(1,2)] <- lapply(observer[c(1,2)], as.numeric)
+
+
+# Round the digits for Latitude and Longitude
+round.oregon <- function(x){
+  if (is.numeric(x))
+    as.numeric(round(x,3))
+  else x
+}
+
+ detectCores()
+cl <- makeCluster(detectCores()) #creates # of clusters of R engines to run code in parallel
+
+oregon2020.round <- as.data.frame(parSapply(cl, observer, round.oregon))
+
+
+ #=Create unique Oregon2020 ID in order to match eBird data
+oregon2020.id <- as.data.frame(paste(oregon2020.round$V1, oregon2020.round$V2, oregon2020.round$V3, sep = "_"))
+
+ #==Add the unique Oregon2020 ID back to original Oregon2020 data==#
+oregon2020.new <- cbind(oregon2020, oregon2020.id)
+colnames(oregon2020.new)[34] <- "round.threedigit.id"
+
+ #== Create unique Oregon 2020-year ID to help extracting raster data ==#
+#colnames(oregon2020)
+#head(oregon2020)
+
+#oregon2020.year <- oregon2020[,c("Unique_Checklist_ID","Year","Latitude","Longitude","Date")]
+
+#write.table(oregon2020.year, "Oregon2020_coord.csv", sep = ",", row.names = FALSE, na = "", fileEncoding = "UTF-8")
+
+#============= eBird Data ============#
+
+# Create eBird unique ID which includes Latitude, Longitude, Year, Month, Day
+  #===round the decimal to 3 in Latitude & Longitude===#
+round <- function(x){
+  if (is.numeric(x)) 
+    as.numeric(round(x, 3))
+  else x}
+  #===Perform parallel analysis===#
+colnames(ebd_unique)
+#start <- proc.time()
+#detectCores()
+#cl <- makeCluster(detectCores()) #creates # of clusters of R engines to run code in parallel
+ebird.round <- as.data.frame(parSapply(cl, ebd_unique[,c(16:17)], round))
+#end <- proc.time()
+#print(end - start)
+
+eB.ID <- as.data.frame(paste(ebird.round$latitude, ebird.round$longitude, ebd_unique$observation_date, sep = "_"))
+
+  #====Add unquie eBird ID back to original data===#
+ebird.new <- cbind(ebd_unique, eB.ID)
+colnames(ebird.new)
+colnames(ebird.new)[41] <- "round.threedigit.id"
+
+```
+
+Now, extract eBird-style Oregon 2020 data
+```{r}
+# Filter duration = 5 for eBird
+ebird.new_5 <- ebird.new %>%
+  filter(
+  duration_minutes == 5
+  )
+
+eb.style.oregon2020 <- ebird.new_5[ebird.new_5$round.threedigit.id %in% oregon2020.new$round.threedigit.id,]
+
+ # Add missing Oregon 2020 counties data back
+ebd_Oregon2020missing <- fread("/nfs/stak/users/shenf/hpc-share/OR2020_missing_eBirddata/missing_eBirdOregon2020_zf.txt", sep = "\t")
+
+ebd_missingOR2020.round <- as.data.frame(parSapply(cl, ebd_Oregon2020missing[,c(17:18)], round))
+
+
+ebd_missingOR2020.id <- as.data.frame(paste(ebd_missingOR2020.round$latitude, ebd_missingOR2020.round$longitude, ebd_Oregon2020missing$observation_date, sep = "_"))
+
+
+ebd_Oregon2020missing <- cbind(ebd_Oregon2020missing, ebd_missingOR2020.id)
+colnames(ebd_Oregon2020missing)[42] <- "round.threedigit.id"
+
+ebd_Oregon2020missing <- ebd_Oregon2020missing[,-1]
+
+
+eb.style.missing.oregon2020 <- rbind(eb.style.oregon2020, ebd_Oregon2020missing)
+
+ # Write the eBird-Oregon 2020 style 
+write.table(eb.style.missing.oregon2020, "eBird-style_oregon2020_zf.csv", sep = "\t", row.names = TRUE, na = "", fileEncoding = "UTF-8")
+
+
+```
+
+Check eBird-style surveys
+```{r}
+eb.style.oregon2020 <- fread("/Volumes/T7/eBird_Oregon2020/data/eBird-style_oregon2020_zf.csv")
+  # Select observation count >=1
+eb.ORobserved <- eb.style.oregon2020[eb.style.oregon2020$observation_count >= 1,] #122835 observations
+  # Check surveys
+length(unique(eb.ORobserved$sampling_event_identifier)) #13667
+```
+
+
+Remove the eBird-style Oregon 2020 data from eBird
+```{r}
+
+eb.clean <- ebird.new[!ebird.new$round.threedigit.id %in% eb.style.missing.oregon2020$round.threedigit.id,]
+ 
+sum(nrow(eb.clean) + nrow (eb.style.missing.oregon2020)) # check the number of rows in total to match ebird.new
+
+ # write filtered eBird data
+
+write.table(eb.clean, "eBird_OR_zf_clean.csv", sep = ",", row.names = TRUE, na = "", fileEncoding = "UTF-8")
+
+
+
+```
+
+Extract pure citizen scientists, excluding Doug, Jenna, Tyler
+```{r}
+library(readr)
+eBird <- readr::read_csv("/Volumes/T7/eBird_Oregon2020/data/eBird_OR_zf_clean.csv")
+
+
+
+
+```
+(New)Extracting missing Oregon 2020-eBird style from "duration" + "county"
+We are targeting the following counties: (1)Baker; (2) Wallowa; (3)Umatilla; (4) Union; (5)Harney; (6) Malheur; (7) Lincoln; (8) Lake
+;(9) Douglas, and (10) Lane.
+
+Set working directory and load file
+```{r}
+Working.directory <-"/nfs/stak/users/shenf/hpc-share"
+setwd(Working.directory)
+
+eBird.data.file <- "ebd_US-OR_201005_202007_relMar-2023.txt"
+eBird.sampling.file <- "ebd_sampling_relMar-2023.txt"
+
+# set ebd path
+
+auk::auk_set_ebd_path("/nfs/stak/users/shenf/hpc-share", overwrite = TRUE)
+#install.packages("remotes")
+#remotes::install_github("mstrimas/ebppackages")
+
+# 2. Point at the exact files to use # 
+ebd <- auk_ebd("ebd_US-OR_201005_202007_relMar-2023.txt", 
+               file_sampling = "ebd_sampling_relMar-2023.txt")
+
+
+#3. "Define" filters to select which data we want## 
+ebd_filters <- ebd %>% 
+  auk_country("US")%>%
+  auk_state("US-OR") %>%
+  auk_county(c( "US-OR-001", # Baker
+                "US-OR-041", # Lincoln
+                "US-OR-063", # Wallowa
+                "US-OR-059", # Umatilla
+                "US-OR-061", # Union
+                "US-OR-025", # Harney
+                "US-OR-037", # Lake
+                "US-OR-019", # Douglas
+                "US-OR-039", # Lane
+                "US-OR-045")) %>% #Malheur 
+  auk_date(date = c("*-05-01", "*-07-15")) %>%
+  auk_protocol("Stationary") %>%
+  auk_duration(duration = c(5,5)) %>%
+  auk_complete()
+ebd_filters
+
+# 4. Name output files in a new "data" folder and conduct filtering # 
+data_dir <- "OR2020_missing_eBirddata"
+if (!dir.exists(data_dir)) {
+  dir.create(data_dir)
+}
+
+f_ebd <- file.path(data_dir, "ebd_filtered_missingOR2020.txt") #Name filtered eBird file
+f_sampling <- file.path(data_dir, "ebd_filtered_missingOR2020_sampling.txt") #Name filterd sampling file
+
+# 5. Filter the eBird data (by using the filter we defined earlier)
+if (!file.exists(f_ebd)) {
+  auk_filter(ebd_filters, file = f_ebd, file_sampling = f_sampling)
+}
+```
+For missing Oregon 2020-eBird data, do zero-filter for presence-absence data
+
+```{r}
+
+##  Zero-fill the data ######
+ebd_missing_zf <- auk_zerofill(f_ebd, f_sampling, collapse = TRUE) 
+
+unique(ebd_missing_zf$locality_type)
+
+#====6. Clean up variables ====##
+# function to convert time observation to hours since midnight
+time_to_decimal <- function(x) {
+  x <- hms(x, quiet = TRUE)
+  hour(x) + minute(x) / 60 + second(x) / 3600
+}
+
+# clean up variables
+ebd_missing_zf <- ebd_missing_zf %>% 
+  mutate(
+    # convert X to NA
+    observation_count = if_else(observation_count == "X", 
+                                NA_character_, observation_count),
+    observation_count = as.integer(observation_count),
+    # effort_distance_km to 0 for non-travelling counts
+    effort_distance_km = if_else(protocol_type != "Traveling", 
+                                 0, effort_distance_km),
+    # convert time to decimal hours since midnight
+    time_observations_started = time_to_decimal(time_observations_started),
+    # split date into year and day of year
+    year = year(observation_date),
+    day_of_year = yday(observation_date)
+  )
+#== additional filtering==#
+ebd_missing_zf_filtered <- ebd_missing_zf %>%
+  filter(
+    number_observers <= 10,
+    locality_type == "P"
+  )
+  
+ebd_missing_unique <- auk_unique(ebd_missing_zf_filtered)
+
+head(ebd_missing_unique)
+
+count(ebd_missing_unique)
+
+unique(ebd_missing_unique$county)
+
+write.table(ebd_missing_unique, "/nfs/stak/users/shenf/hpc-share/OR2020_missing_eBirddata/missing_eBirdOregon2020_zf.txt", sep = "\t", row.names = TRUE, na = "", fileEncoding = "UTF-8")
+ebd_Oregon2020missing <- fread("/nfs/stak/users/shenf/hpc-share/OR2020_missing_eBirddata/missing_eBirdOregon2020_zf.txt", sep = "\t")
+
+unique(ebd_Oregon2020missing$county)
+```
