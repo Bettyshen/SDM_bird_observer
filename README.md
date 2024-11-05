@@ -10,5 +10,5 @@ This repository contains code that performs the analyses in the paper. This pape
 3. **Shell_script**
    - Scripts to run R script through high-performance computing system
 ## Contributors
-* Fang-Yu (Betty) Shen
+* [Fang-Yu (Betty) Shen](https://bettyshen.org/)
 * Fiona Victoria
