@@ -1,4 +1,4 @@
-[Species Centered BRT Model]
+***[Species Location BRT Model]***
 
 Goal: Evaluate species distribution models for all species of birds from Oregon trained BRT
 
@@ -16,12 +16,15 @@ library(terra)
 library(raster)
 library(dismo)
 library(gbm)
+library(tidyverse)
+library(readr)
 ```
+
 
 Load Test Data for species-centered
 ```{r}
 # Define the base directory
-testdata_dir <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/Data/TestData/"
+testdata_dir <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TestData/SpeciesCentered/"
 
 # Define file names
 file_names <- c("SpeciesCentered_FixedRadius.csv", "SpeciesCentered_noRadius.csv", "SpeciesCentered_ESW.csv")
@@ -30,89 +33,162 @@ file_names <- c("SpeciesCentered_FixedRadius.csv", "SpeciesCentered_noRadius.csv
 fixed.test <- read.csv(paste0(testdata_dir, file_names[1]))
 noRadius.test <- read.csv(paste0(testdata_dir, file_names[2]))
 esw.test <- read.csv(paste0(testdata_dir, file_names[3]))
+
+
 ```
 
-Load the Trained models for species-centered strategy
+Load the Trained models for species-location strategy
 ```{r}
 individual_species_oregon <- split(fixed.test, fixed.test$Common_Name)
 
-model.dir.noradius <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_NoRadius"
+model.dir.noradius <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SpeciesCentered/SpeciesCentered_NoRadius"
 noradius.models <- list.files(model.dir.noradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
 
-model.dir.fixedradius <- "//Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_FixedRadius"
+model.dir.fixedradius <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SpeciesCentered/SpeciesCentered_FixedRadius"
 fixedradius.models <- list.files(model.dir.fixedradius, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
 
-model.dir.esw <- "/Users/fionavictoria/Documents/Ecology_Research/Betty/TrainedModel/SpeciesCentered_ESW"
+model.dir.esw <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SpeciesCentered/SpeciesCentered_ESW"
 esw.models <- list.files(model.dir.esw, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
 
+```
 
+***===Model Evaluation (Deviance, Kendall, Root mean square error)====***
+We will use deviance to test difference of likelihood between the fitted model (BRTs) and the saturated model
+- Assign NA to NULL BRT models for each species & predictor extraction method***
+Load all models for a given species and calculate deviance values
+```{r}
+
+# Create empty dataframe to store evaluation results
 result <- data.frame(Species = character(),
                      Extraction_Approach = character(),
-                     No_radius = numeric(),
+                     Metric = character(),
+                     Pixel_radius = numeric(),
                      Fixed_Radius = numeric(),
-                     Effective_Strip_Width = numeric())
+                     Effective_Radius = numeric())
 
-# Function to load all models for a given bird species
 load_models_for_species <- function(species_name) {
 
-    #===For no radius====#
-  
+    # Initialize variables to store deviance values
+    dev_noRadius <- NA
+    dev_fixed <- NA
+    dev_esw <- NA
+    
+    # Initialize variables to store Kendall's rank coefficient values
+    kendall_noRadius <- NA
+    kendall_fixed <- NA
+    kendall_esw <- NA
+    
+    # Initialize variables to store root mean square error
+    rmse_noRadius <- NA
+    rmse_fixed <- NA
+    rmse_esw <- NA
+
+    
+    #=== For pixel radius ===#
     noradius.perspecies <- grep(species_name, noradius.models, value = TRUE)
-    noradius.perspecies.model <- readRDS(noradius.perspecies)
-
-    pred.noRadius <- predict.gbm(object = noradius.perspecies.model, 
-                          newdata = noRadius.test[noRadius.test$Common_Name == species_name, ],
-                          n.trees = noradius.perspecies.model$gbm.call$best.trees,
-                          type = "response") 
     
-    print("===")
-    # Calculate AUC
-    d.noRadius <- cbind(noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, pred.noRadius)
-    pres.noRadius <- d.noRadius[d.noRadius[,1]>= 1, 2]
-    abs.noRadius <- d.noRadius[d.noRadius[,1] == 0, 2]
-    e.noRadius <- evaluate(p = pres.noRadius, a = abs.noRadius)
-    print("===")
-    
-    
-    #===For fixed radius===#
-    
-    fixedradius.perspecies <- grep(species_name, fixedradius.models, value = TRUE)
-    fixedradius.perspecies.model <- readRDS(fixedradius.perspecies)
-    
-    pred.fixed <- predict.gbm(object = fixedradius.perspecies.model, 
-                          newdata = fixed.test[fixed.test$Common_Name == species_name, ],
-                          n.trees = fixedradius.perspecies.model$gbm.call$best.trees,
-                          type = "response")
-    # Calculate AUC
-    d <- cbind(fixed.test[fixed.test$Common_Name == species_name, ]$Occur, pred.fixed)
-
-    pres <- d[d[,1]>= 1, 2]
-    abs <- d[d[,1] == 0, 2]
-    e.fixed <- evaluate(p = pres, a = abs)
-    
-    #====For ESW=====#
-    
-    esw.perspecies <- grep(species_name, esw.models, value = TRUE)
-    esw.perspecies.model <- readRDS(esw.perspecies)
-    
-    pred.ESW <- predict.gbm(object = esw.perspecies.model, 
-                          newdata = esw.test[esw.test$Common_Name == species_name, ],
-                          n.trees = esw.perspecies.model$gbm.call$best.trees,
-                          type = "response") 
-    
-    # Calculate AUC
-    d.ESW <- cbind(esw.test[esw.test$Common_Name == species_name, ]$Occur, pred.ESW)
-    pres.ESW <- d.ESW[d.ESW[,1]>= 1, 2]
-    abs.ESW <- d.ESW[d.ESW[,1] == 0, 2]
-    e.ESW <- evaluate(p = pres.ESW, a = abs.ESW)
+    if (length(noradius.perspecies) > 0) {
+        noradius.perspecies.model <- readRDS(noradius.perspecies)
         
-    per_bird.result <- data.frame(Species = species_name,
-                         Extraction_Approach = "Species-Centered Approach",
-                         No_radius = e.noRadius@auc,
-                         Fixed_Radius = e.fixed@auc,
-                         Effective_Strip_Width = e.ESW@auc)
-    return (per_bird.result)
+        if (!is.null(noradius.perspecies.model$gbm.call$best.trees)) {
+            pred.noRadius <- predict.gbm(object = noradius.perspecies.model, 
+                                         newdata = noRadius.test[noRadius.test$Common_Name == species_name, ],
+                                         n.trees = noradius.perspecies.model$gbm.call$best.trees,
+                                         type = "response")
+            
+            # Calculate deviance
+            dev_noRadius <- calc.deviance(obs = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                          pred = pred.noRadius, calc.mean = TRUE, family = "poisson")
+            
+            # Calculate Kendall's correlation
+            kendall_noRadius <- cor(x = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                    y = pred.noRadius, method = "kendall")
+            
+            # Calculate Root Mean Square Error
+            rmse_noRadius <- rmse(actual = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                  predicted = pred.noRadius)
+            
+        }
+    }
+
+    #=== For fixed radius ===#
+    fixedradius.perspecies <- grep(species_name, fixedradius.models, value = TRUE)
     
+    if (length(fixedradius.perspecies) > 0) {
+        fixedradius.perspecies.model <- readRDS(fixedradius.perspecies)
+        
+        if (!is.null(fixedradius.perspecies.model$gbm.call$best.trees)) {
+            pred.fixed <- predict.gbm(object = fixedradius.perspecies.model, 
+                                      newdata = fixed.test[fixed.test$Common_Name == species_name, ],
+                                      n.trees = fixedradius.perspecies.model$gbm.call$best.trees,
+                                      type = "response")
+            # Calculate deviance
+            dev_fixed <- calc.deviance(obs = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                                       pred = pred.fixed, calc.mean = TRUE, family = "poisson")   
+            
+            # Calculate Kendall's correlation
+            kendall_fixed <- cor(x = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                                 y = pred.fixed, method = "kendall")
+            
+            # Calculate Root Mean Square Error
+            rmse_fixed <- rmse(actual = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                               predicted = pred.fixed)
+
+        }
+    }
+
+    #=== For Effective radius ===#
+    esw.perspecies <- grep(species_name, esw.models, value = TRUE)
+    
+    if (length(esw.perspecies) > 0) {
+        esw.perspecies.model <- readRDS(esw.perspecies)
+        
+        if (!is.null(esw.perspecies.model$gbm.call$best.trees)) {
+            pred.ESW <- predict.gbm(object = esw.perspecies.model, 
+                                    newdata = esw.test[esw.test$Common_Name == species_name, ],
+                                    n.trees = esw.perspecies.model$gbm.call$best.trees,
+                                    type = "response")
+            # Calculate deviance
+            dev_esw <- calc.deviance(obs = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                                     pred = pred.ESW, calc.mean = TRUE, family = "poisson")   
+            # Calculate Kendall's correlation
+            kendall_esw <- cor(x = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                                 y = pred.ESW, method = "kendall")
+            
+            # Calculate Root Mean Square Error
+            rmse_esw <- rmse(actual = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                               predicted = pred.ESW)
+
+        }
+    }
+
+    # Store results in a dataframe
+      # Deviance
+    per_bird.result.dev <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Species-location Approach",
+                                      Metric = "deviance",
+                                      Pixel_radius = dev_noRadius,
+                                      Fixed_Radius = dev_fixed,
+                                      Effective_Radius = dev_esw)
+      # Kendall rank correlation test
+    per_bird.result.kendall <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Species-location Approach",
+                                      Metric = "Kendall",
+                                      Pixel_radius = kendall_noRadius,
+                                      Fixed_Radius = kendall_fixed,
+                                      Effective_Radius = kendall_esw)
+      # Root Mean Square Error
+    per_bird.result.RMSE <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Species-location Approach",
+                                      Metric = "RMSE",
+                                      Pixel_radius = rmse_noRadius,
+                                      Fixed_Radius = rmse_fixed,
+                                      Effective_Radius = rmse_esw)
+    
+    # Concatenate per bird results in one data frame
+    per_bird.result <- rbind(per_bird.result.dev, per_bird.result.kendall, per_bird.result.RMSE)
+    
+    return(per_bird.result)
 }
 
 
@@ -125,6 +201,8 @@ for (bird in names(individual_species_oregon)) {
 
 ```
 
+Export as CSV
 ```{r}
-print(result)
+write.table(result, file = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/evalMetric-SpeciesLocation_Deviance.csv", sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
+
 ```
