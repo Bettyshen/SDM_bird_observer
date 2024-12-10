@@ -1,4 +1,4 @@
-[Observer location BRT Model]
+[Observer Centered BRT Model]
 
 Goal: Evaluate species distribution models for all species of birds from Oregon trained BRT
 
@@ -18,6 +18,7 @@ library(dismo)
 library(gbm)
 library(tidyverse)
 library(readr)
+library(Metrics)
 ```
 
 Read ESW test dataset
@@ -44,7 +45,7 @@ file_names <- c("SurveyCentered_FixedRadius.csv", "SurveyCentered_noRadius.csv")
 fixed.test <- read.csv(paste0(testdata_dir, file_names[1]))
 noRadius.test <- read.csv(paste0(testdata_dir, file_names[2]))
 
-
+head(fixed.test)
 ```
 
 Load the Trained models for observer-centered strategy
@@ -60,38 +61,79 @@ fixedradius.models <- list.files(model.dir.fixedradius, pattern = "\\.rds$", ful
 model.dir.esw <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SurveyCentered/SurveyCentered_ESW"
 esw.models <- list.files(model.dir.esw, pattern = "\\.rds$", full.names = TRUE, recursive = TRUE)
 
+
+
+```
+
+***Individual species deviance test***
+```{r}
+# Trained model
+acron.noradius <- readRDS("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/BRT_train/TrainedModel/SurveyCentered/SurveyCentered_NoRadius/Acorn Woodpecker.rds")
+
+# Test dataset
+noRadius.test
+
+
+# Predict on test dataset
+Acron.pred.noRadius <- predict.gbm(object = acron.noradius, 
+                                         newdata = noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ],
+                                         n.trees = acron.noradius$gbm.call$best.trees,
+                                         type = "response")
+length(Acron.pred.noRadius)
+length(noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ]$Occur)
+
+
+Acorn.comb <- data.frame(noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ]$Occur, Acron.pred.noRadius)
+
+# Calculate deviance
+Acron.pixel.dev <- calc.deviance(obs = noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ]$Occur, pred = Acron.pred.noRadius, calc.mean = TRUE, family = "poisson")
+
+
+# Ensure observed and predicted values have the same length
+if (length(Acron.pred.noRadius) != length(noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ]$Occur)) {
+    stop("Length mismatch between predicted and observed values. Check your filtering or dataset.")
+}
+
+# Ensure no NA values exist in predictions or observations
+if (any(is.na(Acron.pred.noRadius)) || any(is.na(noRadius.test[noRadius.test$Common_Name == "Acorn Woodpecker", ]$Occur))) {
+    stop("NA values detected in observed or predicted data.")
+}
+```
+
+
+
+***===Model Evaluation (Deviance, Kendall, Root mean square error)====***
+We will use deviance to test difference of likelihood between the fitted model (BRTs) and the saturated model
+- First Assign NA to NULL BRT models for each species & predictor extraction method
+Load all models for a given species and calculate deviance values
+```{r}
 # Create empty dataframe to store evaluation results
 result <- data.frame(Species = character(),
                      Extraction_Approach = character(),
                      Metric = character(),
-                     No_radius = numeric(),
+                     Pixel_radius = numeric(),
                      Fixed_Radius = numeric(),
-                     Effective_Strip_Width = numeric())
+                     Effective_Radius = numeric())
 
-```
-
-***===Model Evaluation (AUC, Kappa, True Skill Statistic (TSS))====***
-***Assign NA to NULL BRT models for each species & predictor extraction method***
-Load all models for a given species and calculate AUC values
-```{r}
 load_models_for_species <- function(species_name) {
 
-    # Initialize variables to store AUC values
-    auc_noRadius <- NA
-    auc_fixed <- NA
-    auc_esw <- NA
+    # Initialize variables to store deviance values
+    dev_noRadius <- NA
+    dev_fixed <- NA
+    dev_esw <- NA
+    
+    # Initialize variables to store Kendall's rank coefficient values
+    kendall_noRadius <- NA
+    kendall_fixed <- NA
+    kendall_esw <- NA
+    
+    # Initialize variables to store root mean square error
+    rmse_noRadius <- NA
+    rmse_fixed <- NA
+    rmse_esw <- NA
 
-    # Initialize variables to store Kappa values
-    kappa_noRadius <- NA
-    kappa_fixed <- NA
-    kappa_esw <- NA
     
-    # Initialize variables to store TSS values
-    tss_noRadius <- NA
-    tss_fixed <- NA
-    tss_esw <- NA
-    
-    #=== For no radius ===#
+    #=== For pixel radius ===#
     noradius.perspecies <- grep(species_name, noradius.models, value = TRUE)
     
     if (length(noradius.perspecies) > 0) {
@@ -102,19 +144,19 @@ load_models_for_species <- function(species_name) {
                                          newdata = noRadius.test[noRadius.test$Common_Name == species_name, ],
                                          n.trees = noradius.perspecies.model$gbm.call$best.trees,
                                          type = "response")
-                                         
-            # Calculate AUC
-            d.noRadius <- cbind(noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, pred.noRadius)
-            pres.noRadius <- d.noRadius[d.noRadius[, 1] >= 1, 2]
-            abs.noRadius <- d.noRadius[d.noRadius[, 1] == 0, 2]
-            e.noRadius <- evaluate(p = pres.noRadius, a = abs.noRadius)
-            auc_noRadius <- e.noRadius@auc
             
-            # Calculate kappa
-            kappa_noRadius <- max(e.noRadius@kappa)
+            # Calculate deviance
+            dev_noRadius <- calc.deviance(obs = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                          pred = pred.noRadius, calc.mean = TRUE, family = "poisson")
             
-            # Calculate TSS
-            tss_noRadius <- max(e.noRadius@TPR + e.noRadius@TNR) - 1
+            # Calculate Kendall's correlation
+            kendall_noRadius <- cor(x = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                    y = pred.noRadius, method = "kendall")
+            
+            # Calculate Root Mean Square Error
+            rmse_noRadius <- rmse(actual = noRadius.test[noRadius.test$Common_Name == species_name, ]$Occur, 
+                                  predicted = pred.noRadius)
+            
         }
     }
 
@@ -129,23 +171,22 @@ load_models_for_species <- function(species_name) {
                                       newdata = fixed.test[fixed.test$Common_Name == species_name, ],
                                       n.trees = fixedradius.perspecies.model$gbm.call$best.trees,
                                       type = "response")
-                                      
-            # Calculate AUC
-            d.fixed <- cbind(fixed.test[fixed.test$Common_Name == species_name, ]$Occur, pred.fixed)
-            pres.fixed <- d.fixed[d.fixed[, 1] >= 1, 2]
-            abs.fixed <- d.fixed[d.fixed[, 1] == 0, 2]
-            e.fixed <- evaluate(p = pres.fixed, a = abs.fixed)
-            auc_fixed <- e.fixed@auc
+            # Calculate deviance
+            dev_fixed <- calc.deviance(obs = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                                       pred = pred.fixed, calc.mean = TRUE, family = "poisson")   
             
-             # Calculate kappa
-            kappa_fixed <- max(e.fixed@kappa)
+            # Calculate Kendall's correlation
+            kendall_fixed <- cor(x = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                                 y = pred.fixed, method = "kendall")
             
-            # Calculate TSS
-            tss_fixed <- max(e.fixed@TPR + e.fixed@TNR) - 1
+            # Calculate Root Mean Square Error
+            rmse_fixed <- rmse(actual = fixed.test[fixed.test$Common_Name == species_name, ]$Occur, 
+                               predicted = pred.fixed)
+
         }
     }
 
-    #=== For ESW ===#
+    #=== For Effective radius ===#
     esw.perspecies <- grep(species_name, esw.models, value = TRUE)
     
     if (length(esw.perspecies) > 0) {
@@ -156,48 +197,45 @@ load_models_for_species <- function(species_name) {
                                     newdata = esw.test[esw.test$Common_Name == species_name, ],
                                     n.trees = esw.perspecies.model$gbm.call$best.trees,
                                     type = "response")
-                                    
-            # Calculate AUC
-            d.esw <- cbind(esw.test[esw.test$Common_Name == species_name, ]$Occur, pred.ESW)
-            pres.ESW <- d.esw[d.esw[, 1] >= 1, 2]
-            abs.ESW <- d.esw[d.esw[, 1] == 0, 2]
-            e.esw <- evaluate(p = pres.ESW, a = abs.ESW)
-            auc_esw <- e.esw@auc
+            # Calculate deviance
+            dev_esw <- calc.deviance(obs = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                                     pred = pred.ESW, calc.mean = TRUE, family = "poisson")   
+            # Calculate Kendall's correlation
+            kendall_esw <- cor(x = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                                 y = pred.ESW, method = "kendall")
             
-           # Calculate kappa
-            kappa_esw <- max(e.esw@kappa)
-            
-            # Calculate TSS
-            tss_esw <- max(e.esw@TPR + e.esw@TNR) - 1
+            # Calculate Root Mean Square Error
+            rmse_esw <- rmse(actual = esw.test[esw.test$Common_Name == species_name, ]$Occur, 
+                               predicted = pred.ESW)
+
         }
     }
 
     # Store results in a dataframe
-     # AUC
-    per_bird.result.AUC <- data.frame(Species = species_name,
-                                  Extraction_Approach = "Observer-Centered Approach",
-                                  Metric = "AUC",
-                                  No_radius = auc_noRadius,
-                                  Fixed_Radius = auc_fixed,
-                                  Effective_Strip_Width = auc_esw)
-    # Kappa
-    per_bird.result.kappa <- data.frame(Species = species_name,
-                                  Extraction_Approach = "Observer-Centered Approach",
-                                  Metric = "Kappa",
-                                  No_radius = kappa_noRadius,
-                                  Fixed_Radius = kappa_fixed,
-                                  Effective_Strip_Width = kappa_esw)
-    
-    # TSS
-    per_bird.result.tss <- data.frame(Species = species_name,
-                                  Extraction_Approach = "Observer-Centered Approach",
-                                  Metric = "TSS",
-                                  No_radius = tss_noRadius,
-                                  Fixed_Radius = tss_fixed,
-                                  Effective_Strip_Width = tss_esw)
+      # Deviance
+    per_bird.result.dev <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Observer-location Approach",
+                                      Metric = "deviance",
+                                      Pixel_radius = dev_noRadius,
+                                      Fixed_Radius = dev_fixed,
+                                      Effective_Radius = dev_esw)
+      # Kendall rank correlation test
+    per_bird.result.kendall <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Observer-location Approach",
+                                      Metric = "Kendall",
+                                      Pixel_radius = kendall_noRadius,
+                                      Fixed_Radius = kendall_fixed,
+                                      Effective_Radius = kendall_esw)
+      # Root Mean Square Error
+    per_bird.result.RMSE <- data.frame(Species = species_name,
+                                      Extraction_Approach = "Observer-location Approach",
+                                      Metric = "RMSE",
+                                      Pixel_radius = rmse_noRadius,
+                                      Fixed_Radius = rmse_fixed,
+                                      Effective_Radius = rmse_esw)
     
     # Concatenate per bird results in one data frame
-    per_bird.result <- rbind(per_bird.result.AUC, per_bird.result.kappa, per_bird.result.tss)
+    per_bird.result <- rbind(per_bird.result.dev, per_bird.result.kendall, per_bird.result.RMSE)
     
     return(per_bird.result)
 }
@@ -214,75 +252,11 @@ for (bird in names(individual_species_oregon)) {
 
 Export as CSV
 ```{r}
-write.table(result, file = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/evalMetric-ObserverCentered.csv", sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
-
-```
-
-Print & plot individual results
-```{r}
-print(result)
-tapply(result[4:6], result$Metric, summary)
-
-
-# Plot AUC box plot
-AUC <- result[result$Metric == "AUC",]
-png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/AUC-ObserverCentered.png", width = 2500, height = 2200, res = 300)
-boxplot(AUC[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "AUC",
-        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
-dev.off()
-
-# Plot Kappa
-kappa <- result[result$Metric == "Kappa",]
-png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/Kappa-ObserverCentered.png", width = 2500, height = 2200, res = 300)
-boxplot(kappa[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "Kappa",
-        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
-dev.off()
-
-# Plot TSS
-tss <- result[result$Metric == "TSS",]
-png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/TSS-ObserverCentered.png", width = 2500, height = 2200, res = 300)
-boxplot(tss[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "TSS",
-        main = "Observer-centered Landsat bands predictor mapping strategy evaluation")
-dev.off()
-
+write.table(result, file = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/evalMetric-ObserverLocation.csv", sep = ",", row.names = FALSE, fileEncoding = "UTF-8")
 
 ```
 
 
-Combine evaluation metrics together
-```{r}
-# Plot AUC box plot
-AUC <- result[result$Metric == "AUC",]
-kappa <- result[result$Metric == "Kappa",]
-tss <- result[result$Metric == "TSS",]
-
-png(filename = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Evaluation/Figures/evaMetic-ObserverCentered.png", width = 4500, height = 4200, res = 300)
-par(mfrow = c(2,2))
- 
-  # AUC
-boxplot(AUC[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "AUC",
-        main = "Observer-centered AUC evaluation")
-
-  # Kappa
-boxplot(kappa[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "Kappa",
-        main = "Observer-centered Cohen's Kappa evaluation")
 
 
-  # TSS
-boxplot(tss[,c(4:6)],
-        xlab = "Mapping strategy",
-        ylab = "TSS",
-        main = "Observer-centered True Skill Statistic evaluation")
-dev.off()
 
-```
