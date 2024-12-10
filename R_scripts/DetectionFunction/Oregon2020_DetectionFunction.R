@@ -2,10 +2,8 @@
 #The goal of this script is to build detection function for all species
 
 #===Set working directory and load libraries===#
-setwd("/nfs/stak/users/shenf/hpc-share") #set working directory
+setwd("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling") #set working directory
 library(readr)
-library(stringr)
-install.packages(c("mrds","Distance","dplyr","coda","knitr","futile.logger","stringi"),repos = "http://cran.us.r-project.org")
 library(stringi)
 library(futile.logger)
 library(mrds)
@@ -14,15 +12,16 @@ library(dplyr)
 library(coda)
 library(parallel)
 library(knitr)
-flog.threshold(INFO)  # Set the logging threshold to INFO level
+library(ggplot2)
+flog.threshold(INFO)  # Set the logging threshold to INFO level (you can adjust this as needed)
 
 #****Load Oregon2020 Data***====#
 
-oregon2020 <- read.csv(file="/nfs/stak/users/shenf/hpc-share/oregon2020_full_prepped_090120.csv", header=TRUE,sep=",",dec=".", fill=TRUE, fileEncoding = "Windows-1252")
+oregon2020 <- read.csv(file="/Volumes/T7/eBird_Oregon2020/Oregon2020/oregon2020_full_prepped_090120.csv", header=TRUE,sep=",",dec=".", fill=TRUE, fileEncoding = "Windows-1252")
 
-zero <- read.csv(file = "/nfs/stak/users/shenf/hpc-share/oregon2020_counts_zerofilled_090120.csv", header=TRUE,sep=",",dec=".", fill=TRUE, fileEncoding = "Windows-1252")
+zero <- read.csv(file = "/Volumes/T7/eBird_Oregon2020/Oregon2020/oregon2020_counts_zerofilled_090120.csv", header=TRUE,sep=",",dec=".", fill=TRUE, fileEncoding = "Windows-1252")
 #====Load Bird Species Selection====#
-bird_select <- read.csv(file = "/nfs/stak/users/shenf/hpc-share/Oregon2020_bird_freq.csv",
+bird_select <- read.csv(file = "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/Oregon2020_bird_freq.csv",
                         header = TRUE, sep = ",", dec = ".", fill = TRUE, fileEncoding = "Windows-1252")
 bird_select <- as.data.frame(unique(bird_select[complete.cases(bird_select),]))
 
@@ -199,6 +198,13 @@ cl <- makeCluster(num_cores)
 # Export the fit.hn.uni.haz function and other required libraries
 clusterExport(cl, c("fit.hn.uni.haz", "oregon.all.new", "species_list", "oregonRegion", "oregonSample", "conversion"))
 
+# Define column headers
+column_headers <- c("species_name", "max_distance", "detection_probability", "effectiveRadius", "upper_esw", "lower_esw", "bestModel_name")
+
+# Write headers to the file
+write.table(t(column_headers), file = "effectiveSW_info.csv", sep = ",", col.names = FALSE, row.names = FALSE, quote = FALSE)
+
+# You might need to export additional libraries and data depending on their usage in fit.hn.uni.haz
 # Define a function for parallel execution
 fit_and_plot_species <- function(species_name) {
   # Load necessary libraries and data within the parallel worker
@@ -222,7 +228,7 @@ fit_and_plot_species <- function(species_name) {
     
     if (!is.na(max_distance)) {
       w <- 0.90 * max_distance  # Right truncation unit (m)
-      effectiveRadius <- detection.pro * w
+      effectiveRadius <- sqrt(detection.pro) * w
       effectiveRadius <- as.numeric(round(effectiveRadius, 4))
       
       # Add effectiveRadius to the best model
@@ -255,8 +261,10 @@ fit_and_plot_species <- function(species_name) {
       best.model$l.esw <- l.esw
       
       # Print out effective strip width information
-      cat(paste(species_name, max_distance, detection.pro, effectiveRadius, u.esw, l.esw, sep = ","), file = "effectiveSW_info.csv", "\n", sep = ",", append = TRUE)
+      #cat(paste(species_name, max_distance, detection.pro, effectiveRadius, u.esw, l.esw, sep = ","), file = "effectiveSW_info.csv", "\n", sep = ",", append = TRUE)
       
+      # Print out effective strip width information
+      cat(paste(species_name, max_distance, detection.pro, effectiveRadius, u.esw, l.esw, best.model$ddf$name.message, sep = ","), file = "effectiveSW_info.csv", "\n", sep = ",", append = TRUE)
       #===Plot====#
       plot(best.model,
            main = paste("Oregon 2020, species ", species_name,
@@ -264,10 +272,13 @@ fit_and_plot_species <- function(species_name) {
                         "SE=", round(best.model$dht$individuals$D$se, 4),
                         "\nAverage p =", round(detection.pro, 4),
                         "\n", best.model$ddf$name.message,
-                        "\nEffective Strip Width:", best.model$effectiveRadius))
+                        "\nEffective Radius:", best.model$effectiveRadius))
       
       # Log the "Finished processing species" message
       flog.info(paste("Finished processing species:", species_name, sep = ","))
+      
+      # Write the species name to a log file for successful species
+      #cat(paste("Finished processing species:", species_name, sep = ","), file = "species_log.csv", "\n", sep = ",", append = TRUE)
       
       # Write the species name to a log file for successful species
       cat(paste("Finished processing species:", species_name, sep = ","), file = "species_log.csv", "\n", sep = ",", append = TRUE)
@@ -304,72 +315,106 @@ sp_failed <- sp_status[sp_status$V1 == "Error processing species:", ]
 sp_failed_list <-as.factor(sp_failed$V2)
 
 
+#====== Load detection function summary =====#
+detection.sum <- read.csv("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/DetectionFunctionSummary.csv", sep = ",")
+  # Filter out success species
 
+detection.sp <- detection.sum[detection.sum$species_name %in% sp_success$V2,]
+
+# Summarize detection function
+# Summarize the count of each key function
+Detect.sumSP <- detection.sp %>%
+  group_by(bestModel_name) %>%
+  summarise(count = n())
+
+print(Detect.sumSP)
+# Plot lollipop plot
+
+breaks_seq <- seq(0, 120, by = 20)
+
+detect.plot <- Detect.sumSP %>%
+  arrange(desc(count)) %>%    # First sort by count This sort the dataframe but NOT the factor levels
+  mutate(bestModel_name=factor(bestModel_name, levels=bestModel_name)) %>%   # This trick update the factor levels
+  ggplot( aes(x=bestModel_name, y=count)) +
+  geom_segment( aes(xend=bestModel_name, yend=0)) +
+  geom_point( size=4, color="orange") +
+  theme_bw() +
+  xlab("Key function") +
+  ylab("Frequency") +
+  ggtitle("Summary of key function for 198 bird species") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(vjust = 0.5, hjust = 0.5, size = 12),
+        axis.text.y = element_text(vjust = 0.5, hjust = 0.5, size = 12),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14)) +
+  scale_y_continuous(breaks = breaks_seq, labels = breaks_seq, limits = c(0, 120))
+
+ggsave("detectionSummary.png", width = 10, height = 8, units = "in", dpi = 300)
 
 #***Plot detection function plot for each bird***#
 #*# Locate where to save plots
-png_dir <- "/nfs/stak/users/shenf/hpc-share/DetectionFunctionPlot"
+#png_dir <- "/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/DetectionFunctionPlot"
 
 # Create a directory for PNG files if it doesn't exist
-if (!dir.exists(png_dir)) {
-  dir.create(png_dir)
-}
+#if (!dir.exists(png_dir)) {
+#  dir.create(png_dir)
+#}
 
 # Split the results into groups of 10 species each
-num_species <- length(species_list) # Species count
-num_plots_per_file <- 10 # Constrain the number of species per PNG file
-num_files <- ceiling(num_species / num_plots_per_file) # Count the total PNG files we will produce
+#num_species <- length(species_list) # Species count
+#num_plots_per_file <- 10 # Constrain the number of species per PNG file
+#num_files <- ceiling(num_species / num_plots_per_file) # Count the total PNG files we will produce
 
 # Create and export PNG files
 # Iterates through the number of files needed to export the plots
-for (i in 1:num_files) {
+#for (i in 1:num_files) {
   # Calculate the starting and ending indices for the species to be included in the current file. The purpose is to ensure that each file contains a subset of the total species we have to plot.
-  start_idx <- (i - 1) * num_plots_per_file + 1 # First species to include in the current file
-  end_idx <- min(i * num_plots_per_file, num_species) # The last species to include in the current file.
+#  start_idx <- (i - 1) * num_plots_per_file + 1 # First species to include in the current file
+#  end_idx <- min(i * num_plots_per_file, num_species) # The last species to include in the current file.
   
-  if (start_idx <= end_idx) {
+#  if (start_idx <= end_idx) {
     
-    print(paste("Plotting species from", start_idx, "to", end_idx))
-    png_file <- file.path(png_dir, paste0("bird_plots_", i, ".png"))
-    png(png_file, width = 300, height = 500, units = "mm", res = 300)
-    par(mfrow = c(5, 2))  # Visualize # of graphs at once
+#    print(paste("Plotting species from", start_idx, "to", end_idx))
+#    png_file <- file.path(png_dir, paste0("bird_plots_", i, ".png"))
+#    png(png_file, width = 300, height = 500, units = "mm", res = 300)
+#    par(mfrow = c(5, 2))  # Visualize XX graphs at once
     
     # Iterates through the species within the current file. It starts from start_idx and goes up to end_idx, which ensures that only the species assigned to the current file are processed.
     # Iterate through the species within the current file.
-    for (j in start_idx:end_idx) {
-      if (j <= length(results)) {
+#    for (j in start_idx:end_idx) {
+#      if (j <= length(results)) {
         # Get the current species name [j] from species_list
-        species_name <- species_list[j]
+#        species_name <- species_list[j]
         
         # Check if the species is in the list of failed species
-        if (!(species_name %in% sp_failed_list)) {
-          print(paste("Processing species", species_name))
+#       if (!(species_name %in% sp_failed_list)) {
+#         print(paste("Processing species", species_name))
           
           # Capture the results for the current species [j]
-          current_result <- results[[j]]
+#         current_result <- results[[j]]
           
           # Plot the results and add a legend with the species name
-          plot(current_result,
-               main = paste("Oregon 2020, species ", species_name,
-                            "\nD-hat=", round(current_result$dht$individuals$D$Estimate, 4),
-                            "SE=", round(current_result$dht$individuals$D$se, 4),
-                            "\nAverage p =", round(current_result$ddf$fitted[[1]], 4),
-                            "\n", current_result$ddf$name.message,
-                            "\nEffective Strip Width", current_result$effectiveRadius),
-               cex.axis = 2, # Adjust the font size as needed
-               cex.lab = 1.7)  # Adjust the font size as needed
+#         plot(current_result,
+#             main = paste("Oregon 2020, species ", species_name,
+#                           "\nD-hat=", round(current_result$dht$individuals$D$Estimate, 4),
+#                            "SE=", round(current_result$dht$individuals$D$se, 4),
+#                            "\nAverage p =", round(current_result$ddf$fitted[[1]], 4),
+#                            "\n", current_result$ddf$name.message,
+#                            "\nEffective Strip Width", current_result$effectiveRadius),
+#               cex.axis = 2, # Adjust the font size as needed
+#               cex.lab = 1.7)  # Adjust the font size as needed
           
           # Add a legend with the species name
-          legend("topright", legend = species_name, bty = "n", cex = 2)
-        } else {
-          print(paste("Skipping plotting for failed species", species_name))
-        }
-      }
-    }
+#          legend("topright", legend = species_name, bty = "n", cex = 2)
+#        } else {
+#          print(paste("Skipping plotting for failed species", species_name))
+#        }
+#      }
+#    }
     
-    dev.off()  # Close the PNG device
-  }
-}
+#    dev.off()  # Close the PNG device
+#  }
+#}
 
 # Make sure to stop the cluster at the end
-stopCluster(cl)
+#stopCluster(cl)
