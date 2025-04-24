@@ -36,11 +36,11 @@ all_birds.weight.select <- unique(all_birds.weight[,c("Unique_Checklist_ID", "Co
 all_birds.weight.env.fixed <- merge(all_birds.weight.select, bird.env.fixRadius, 
                                    by = c("Unique_Checklist_ID", "Common_Name"), all.y = TRUE)
 
-# For No radius
+# For Pixel radius
 all_birds.weight.env.noRadius <- merge(all_birds.weight.select, bird.env.noRadius, 
                                       by = c("Unique_Checklist_ID", "Common_Name"), all.y = TRUE)
 
-# For effective strip width
+# For effective radius
 all_birds.weight.env.ESW <- merge(all_birds.weight.select, bird.env.esw, 
                                  by = c("Unique_Checklist_ID", "Common_Name"), all.y = TRUE)
 
@@ -62,13 +62,13 @@ print(nrow(all_birds.weight.env.ESW))
 #' Rename columns for future input in assigning blocks
 ##-----------------------------------------------------
 
-  # No radius
+  # Pixel radius
 all_birds.weight.env.noRadius <- cbind(all_birds.weight.env.noRadius, str_split(all_birds.weight.env.noRadius$Unique_Checklist_ID, pattern = "_", simplify = TRUE))
 
   # Fixed radius
 all_birds.weight.env.fixed <- cbind(all_birds.weight.env.fixed, str_split(all_birds.weight.env.fixed$Unique_Checklist_ID, pattern = "_", simplify = TRUE))
 
-  # Effective Strip Width
+  # Effective radius
 all_birds.weight.env.ESW <- cbind(all_birds.weight.env.ESW, str_split(all_birds.weight.env.ESW$Unique_Checklist_ID, pattern = "_", simplify = TRUE))
 
 columns_to_use <- c("Common_Name","REL_SAMP_EFFORT","x","y","month","day",
@@ -97,7 +97,7 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
         # Set seed to make our partition reproducible
         set.seed(123)
 
-        varNames = c("SR_B1_median", "SR_B2_median", "SR_B3_median", "SR_B4_median", "SR_B5_median", "SR_B7_median", "QA_PIXEL_median")
+        varNames = c("SR_B1_median", "SR_B2_median", "SR_B3_median", "SR_B4_median", "SR_B5_median", "SR_B7_median")
 
         oregon.extent <- data.frame(lat = c(41.99305, 46.23474),
                                     lon = c(-124.5276, -116.6899))
@@ -118,11 +118,11 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
         fixed.train <- per_bird.weight.env.fixed[train_select,]
         fixed.test <- per_bird.weight.env.fixed[-train_select,]
 
-        # For no radius
+        # For pixel radius
         noRadius.train <- per_bird.weight.env.noRadius[train_select,]
         noRadius.test <- per_bird.weight.env.noRadius[-train_select,]
 
-        # For ESW
+        # For effective radius
         esw.train <- per_bird.weight.env.ESW[train_select,]
         esw.test <- per_bird.weight.env.ESW[-train_select,]
 
@@ -136,7 +136,7 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
                               spatial.split.degrees = 1,
                               n.blocks = 10,
                               iterations = 5000)
-        # For no radius
+        # For pixel radius
         block.noRadius <- spatiotemp_block(occ.data = noRadius.train,
                               vars.to.block.by = varNames,
                               temporal.block = "day",
@@ -145,7 +145,7 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
                               n.blocks = 10,
                               iterations = 5000)
         
-        # For effective strip width
+        # For effective radius
         block.ESW <- spatiotemp_block(occ.data = esw.train,
                               vars.to.block.by = varNames,
                               temporal.block = "day",
@@ -175,7 +175,7 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
                           tree.complexity = 5,
                           learning.rate = 0.001)
 
-        #====For no radius=====#
+        #====For pixel radius=====#
 
 
         weights.noRadius <- (1 - block.noRadius$REL_SAMP_EFFORT) # Need to pull out weights independently
@@ -190,7 +190,7 @@ all_birds_results <- foreach(i = unique(all_birds.weight.env.noRadius.selectedco
                                   tree.complexity = 5,
                                   learning.rate = 0.001)
 
-        #====For ESW =====#
+        #====For effective radius =====#
 
         weights.ESW <- (1 - block.ESW$REL_SAMP_EFFORT) # Need to pull out weights independently
         block.row.ESW <- as.vector(block.ESW$BLOCK.CATS) # Need to pull out assigned blocks
