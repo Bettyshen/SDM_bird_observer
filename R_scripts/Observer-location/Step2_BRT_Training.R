@@ -31,31 +31,31 @@ if (dir.exists(directory_path)) {
 #' Load environmental values from observer-location
 #' We need to load two sets of file
 ## -------------------------------------------------------------------------------------------------------------
- # No radius
+ # Pixel radius (30 m)
 bird.env.noRadius.1 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_noRadius_weights_set1.csv")
 bird.env.noRadius.2 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_noRadius_weights_set2.csv")
- # Fixed radius
+ # Fixed radius (100 m)
 bird.env.fixRadius.1 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_fixedRadius_weights_set1.csv")
 bird.env.fixRadius.2 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_fixedRadius_weights_set2.csv")
- # Effective strip width
+ # Effective radius (species-specific)
 bird.env.esw.1 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_ESW_weights_set1.csv")
 bird.env.esw.2 <- fread("/Volumes/T7/eBird_Oregon2020/distance/Distance-Sampling/env_extraction/Median_surveyCentered_ESW_weights_set2.csv")
 
 #' Merge two sets of data into one
 ## -----------------------------------------------------------------------------------------------------------------
 
-  # No radius
+  # Pixel radius
 bird.env.noRadius.all <- rbind(bird.env.noRadius.1, bird.env.noRadius.2)
 
   # Fixed radius
 bird.env.fixRadius.all <- rbind(bird.env.fixRadius.1, bird.env.fixRadius.2)
 
-  # ESW
+  # Effective radius
 bird.env.esw.all <- rbind(bird.env.esw.1, bird.env.esw.2)
 
 #' Rename columns for future input in assigning blocks
 ##------------------------------------------------------------------------------------------------------------
-  # No radius
+  # Pixel radius
 bird.env.noRadius.all <- cbind(bird.env.noRadius.all, str_split(bird.env.noRadius.all$Unique_Checklist_ID, pattern = "_", simplify = TRUE))
     # Rename new columns
 bird.env.noRadius.all <- bird.env.noRadius.all %>%
@@ -87,7 +87,7 @@ bird.env.fixRadius.all <- bird.env.fixRadius.all %>%
   bird.env.fixRadius.all$y <- as.numeric(bird.env.fixRadius.all$y)
   str(bird.env.fixRadius.all)
   
-  # Effective Strip Width
+  # Effective radius
 bird.env.esw.all <- cbind(bird.env.esw.all, str_split(bird.env.esw.all$Unique_Checklist_ID, pattern = "_", simplify = TRUE))
     # Rename new columns
 bird.env.esw.all <- bird.env.esw.all %>%
@@ -121,7 +121,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
     # Set seed to make our partition reproducible
     set.seed(123)
                                
-    varNames = c("SR_B1_median", "SR_B2_median", "SR_B3_median", "SR_B4_median", "SR_B5_median", "SR_B7_median", "QA_PIXEL_median")
+    varNames = c("SR_B1_median", "SR_B2_median", "SR_B3_median", "SR_B4_median", "SR_B5_median", "SR_B7_median")
 
     oregon.extent <- data.frame(lat = c(41.99305, 46.23474),
                                 lon = c(-124.5276, -116.6899))
@@ -146,7 +146,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
     noRadius.train <- per_bird.weight.env.noRadius[train_select,]
     noRadius.test <- per_bird.weight.env.noRadius[-train_select,]
     
-    # For ESW
+    # For effective radius
     esw.train <- per_bird.weight.env.ESW[train_select,]
     esw.test <- per_bird.weight.env.ESW[-train_select,]
     
@@ -169,7 +169,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
                           n.blocks = 10,
                           iterations = 5000)
 
-    # For effective strip width
+    # For effective radius
     block.ESW <- spatiotemp_block(occ.data = esw.train,
                           vars.to.block.by = varNames,
                           temporal.block = "day",
@@ -193,7 +193,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
                       tree.complexity = 5,
                       learning.rate = 0.001)
         
-    #====For no radius=====#
+    #====For pixel radius=====#
     
     weights.noRadius <- (1 - block.noRadius$REL_SAMP_EFFORT) # Need to pull out weights independently
     block.row.noRadius <- as.vector(block.noRadius$BLOCK.CATS) # Need to pull out assigned blocks
@@ -207,7 +207,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
                               tree.complexity = 5,
                               learning.rate = 0.001)
     
-    #====For ESW =====#
+    #====For effective radius =====#
     
     weights.ESW <- (1 - block.ESW$REL_SAMP_EFFORT) # Need to pull out weights independently
     block.row.ESW <- as.vector(block.ESW$BLOCK.CATS) # Need to pull out assigned blocks
@@ -233,13 +233,13 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
     }, error = function(e) {
       print(paste("Failed to write fixed.brt to file:", paste0(base_dir, "/TrainedModel/SurveyCentered_FixedRadius/", i, ".rds"), "Error:", e$message))
     })
-      # No radius
+      # Pixel radius
     tryCatch({
       saveRDS(noRadius.brt, file = paste0(base_dir, "/TrainedModel/SurveyCentered_NoRadius/", i, ".rds"))
     }, error = function(e) {
       print(paste("Failed to write noRadius.brt to file:", paste0(base_dir, "/TrainedModel/SurveyCentered_NoRadius/", i, ".rds"), "Error:", e$message))
     })
-      # ESW
+      # Effective radius
     tryCatch({
       saveRDS(ESW.brt, file = paste0(base_dir, "/TrainedModel/SurveyCentered_ESW/", i, ".rds"))
     }, error = function(e) {
@@ -257,7 +257,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
       print(paste("Failed to write to fixed radius test data:", fname.fixed, "Error:", e$message))
     })
     
-    # No radius
+    # Pixel radius
     tryCatch({
     fname.noRadius <- paste0(base_dir, "/TestData/SurveyCentered_noRadius.csv")
     write.table(noRadius.test, file = fname.noRadius, sep = ",",
@@ -266,7 +266,7 @@ all_birds_results <- foreach(i = unique(bird.env.fixRadius.all$Common_Name), .pa
       print(paste("Failed to write to no radius test data:", fname.noRadius, "Error:", e$message))
     })
     
-    # Effective strip width
+    # Effective radius
     tryCatch({
     fname.esw <- paste0(base_dir, "/TestData/SurveyCentered_ESW.csv")
     write.table(esw.test, file = fname.esw, sep = ",",
