@@ -11,4 +11,4 @@ This repository contains code that performs the analyses in the Shen et al. (202
    - Scripts to run R script through high-performance computing system
 ## Contributors
 * [Fang-Yu (Betty) Shen](https://bettyshen.org/)
-* Fiona Victoria
+* Fiona Victoria Stanley Jothiraj
